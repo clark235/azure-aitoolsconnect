@@ -1,10 +1,18 @@
-use crate::config::{AuthMethod, Cloud, EntraConfig};
+use crate::config::{AuthMethod, Cloud, EntraConfig, UserAuthConfig};
 use crate::error::{AppError, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+
+mod manual_token;
+mod managed_identity;
+mod device_code;
+
+pub use manual_token::ManualTokenAuth;
+pub use managed_identity::ManagedIdentityAuth;
+pub use device_code::DeviceCodeAuth;
 
 /// Token response from Entra ID
 #[derive(Debug, Deserialize)]
@@ -302,6 +310,9 @@ impl AuthProvider for CognitiveTokenAuth {
 pub struct AuthManager {
     api_key: Option<ApiKeyAuth>,
     entra: Option<EntraTokenAuth>,
+    manual_token: Option<ManualTokenAuth>,
+    managed_identity: Option<ManagedIdentityAuth>,
+    device_code: Option<DeviceCodeAuth>,
     default_method: AuthMethod,
 }
 
@@ -309,6 +320,7 @@ impl AuthManager {
     pub fn new(
         api_key: Option<String>,
         entra_config: Option<&EntraConfig>,
+        user_config: Option<&UserAuthConfig>,
         cloud: Cloud,
         default_method: AuthMethod,
     ) -> Result<Self> {
@@ -327,9 +339,43 @@ impl AuthManager {
             None
         };
 
+        // Initialize manual token auth if bearer token is provided
+        let manual_token_auth = if let Some(config) = user_config {
+            if let Some(token) = &config.bearer_token {
+                Some(ManualTokenAuth::new(token.clone())?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Initialize managed identity auth if requested
+        let managed_identity_auth = if default_method == AuthMethod::ManagedIdentity {
+            let user_assigned_client_id = user_config
+                .and_then(|c| c.managed_identity_client_id.clone());
+            Some(ManagedIdentityAuth::new(&cloud, user_assigned_client_id)?)
+        } else {
+            None
+        };
+
+        // Initialize device code auth if requested
+        let device_code_auth = if default_method == AuthMethod::DeviceCode {
+            let tenant_id = user_config
+                .and_then(|c| c.tenant_id.clone())
+                .ok_or(AppError::MissingTenantId)?;
+            let client_id = user_config.and_then(|c| c.client_id.clone());
+            Some(DeviceCodeAuth::new(tenant_id, client_id, &cloud)?)
+        } else {
+            None
+        };
+
         Ok(Self {
             api_key: api_key_auth,
             entra: entra_auth,
+            manual_token: manual_token_auth,
+            managed_identity: managed_identity_auth,
+            device_code: device_code_auth,
             default_method,
         })
     }
@@ -337,24 +383,53 @@ impl AuthManager {
     /// Get the primary auth provider based on configuration
     pub fn get_provider(&self) -> Result<&dyn AuthProvider> {
         match self.default_method {
-            AuthMethod::Key => self
-                .api_key
-                .as_ref()
-                .map(|a| a as &dyn AuthProvider)
-                .ok_or_else(|| AppError::Auth("API key not configured".to_string())),
-            AuthMethod::Token => self
-                .entra
-                .as_ref()
-                .map(|a| a as &dyn AuthProvider)
-                .ok_or_else(|| AppError::Auth("Entra ID not configured".to_string())),
+            AuthMethod::Key => {
+                if let Some(ref api_key) = self.api_key {
+                    Ok(api_key as &dyn AuthProvider)
+                } else {
+                    Err(AppError::Config("API key not configured".to_string()))
+                }
+            }
+            AuthMethod::Token => {
+                if let Some(ref entra) = self.entra {
+                    Ok(entra as &dyn AuthProvider)
+                } else {
+                    Err(AppError::Config("Entra token auth not configured".to_string()))
+                }
+            }
+            AuthMethod::DeviceCode => {
+                if let Some(ref device_code) = self.device_code {
+                    Ok(device_code as &dyn AuthProvider)
+                } else {
+                    Err(AppError::MissingTenantId)
+                }
+            }
+            AuthMethod::ManagedIdentity => {
+                if let Some(ref mi) = self.managed_identity {
+                    Ok(mi as &dyn AuthProvider)
+                } else {
+                    Err(AppError::ManagedIdentityNotAvailable(
+                        "Managed identity not available in this environment".to_string(),
+                    ))
+                }
+            }
+            AuthMethod::ManualToken => {
+                if let Some(ref manual) = self.manual_token {
+                    Ok(manual as &dyn AuthProvider)
+                } else {
+                    Err(AppError::InvalidBearerToken(
+                        "Bearer token not provided".to_string(),
+                    ))
+                }
+            }
             AuthMethod::Both => {
-                // Prefer API key for simplicity
+                // Try API key first, fallback to entra
                 if self.api_key.is_some() {
                     Ok(self.api_key.as_ref().unwrap() as &dyn AuthProvider)
                 } else if self.entra.is_some() {
                     Ok(self.entra.as_ref().unwrap() as &dyn AuthProvider)
                 } else {
-                    Err(AppError::Auth("No authentication configured".to_string()))
+                    Err(AppError::Config("No authentication configured".to_string()))
                 }
             }
         }

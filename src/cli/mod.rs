@@ -59,6 +59,14 @@ pub struct TestArgs {
     #[arg(long, value_enum, default_value_t = AuthMethodArg::Key)]
     pub auth: AuthMethodArg,
 
+    /// Tenant ID (required for device-code auth method)
+    #[arg(long, env = "AZURE_USER_TENANT_ID")]
+    pub tenant: Option<String>,
+
+    /// Bearer token (for manual-token auth method)
+    #[arg(long, env = "AZURE_BEARER_TOKEN")]
+    pub bearer_token: Option<String>,
+
     /// Output format
     #[arg(short, long, value_enum, default_value_t = OutputFormatArg::Human)]
     pub output: OutputFormatArg,
@@ -150,6 +158,12 @@ pub enum AuthMethodArg {
     Key,
     Token,
     Both,
+    #[value(name = "device-code")]
+    DeviceCode,
+    #[value(name = "managed-identity")]
+    ManagedIdentity,
+    #[value(name = "manual-token")]
+    ManualToken,
 }
 
 impl From<AuthMethodArg> for crate::config::AuthMethod {
@@ -158,6 +172,9 @@ impl From<AuthMethodArg> for crate::config::AuthMethod {
             AuthMethodArg::Key => crate::config::AuthMethod::Key,
             AuthMethodArg::Token => crate::config::AuthMethod::Token,
             AuthMethodArg::Both => crate::config::AuthMethod::Both,
+            AuthMethodArg::DeviceCode => crate::config::AuthMethod::DeviceCode,
+            AuthMethodArg::ManagedIdentity => crate::config::AuthMethod::ManagedIdentity,
+            AuthMethodArg::ManualToken => crate::config::AuthMethod::ManualToken,
         }
     }
 }

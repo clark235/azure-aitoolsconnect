@@ -5,7 +5,9 @@ A Rust-based CLI tool for verifying connectivity from clients to Azure AI Servic
 ## Features
 
 - **Multi-Service Testing** - Test Speech, Translator, Language, Vision, and Document Intelligence services
-- **Multiple Authentication Methods** - API keys, Entra ID (Azure AD) tokens, and cognitive token exchange
+- **Multiple Authentication Methods** - API keys, device code flow, managed identity, manual tokens, service principals, and cognitive token exchange
+- **User-Friendly Authentication** - No Azure CLI required - authenticate directly via device code flow
+- **Azure Environment Support** - Automatic authentication in Azure VMs, App Service, and Container Apps via managed identity
 - **Network Diagnostics** - DNS resolution, TLS handshake validation, and latency measurement
 - **Flexible Configuration** - TOML files with environment variable overrides
 - **Multiple Output Formats** - Human-readable, JSON, and JUnit XML for CI/CD integration
@@ -230,9 +232,51 @@ image_file = "/path/to/image.png"
 | `AZURE_CLOUD` | Cloud environment (global/china) |
 | `AZURE_SPEECH_API_KEY` | Speech service API key |
 | `AZURE_TRANSLATOR_API_KEY` | Translator service API key |
-| `AZURE_TENANT_ID` | Entra ID tenant |
-| `AZURE_CLIENT_ID` | Entra ID client ID |
-| `AZURE_CLIENT_SECRET` | Entra ID client secret |
+| `AZURE_TENANT_ID` | Service principal tenant ID |
+| `AZURE_CLIENT_ID` | Service principal client ID |
+| `AZURE_CLIENT_SECRET` | Service principal client secret |
+| `AZURE_USER_TENANT_ID` | Tenant ID for device code flow |
+| `AZURE_BEARER_TOKEN` | Manual bearer token |
+| `AZURE_MI_CLIENT_ID` | Client ID for user-assigned managed identity |
+
+## Authentication Methods
+
+Azure AI Tools Connect supports six authentication methods to accommodate different scenarios:
+
+1. **API Key** - Simplest method for quick testing
+2. **Device Code Flow** - User authentication without Azure CLI (NEW)
+3. **Managed Identity** - Zero-config authentication in Azure environments (NEW)
+4. **Manual Token** - Advanced troubleshooting with custom tokens (NEW)
+5. **Service Principal** - Enterprise automation with Entra ID
+6. **Both** - Fallback between API key and service principal
+
+### Quick Examples
+
+```bash
+# API Key (simplest)
+azure-aitoolsconnect test --api-key YOUR_KEY --region eastus
+
+# Device Code Flow (no Azure CLI needed)
+azure-aitoolsconnect test --auth device-code --tenant YOUR_TENANT_ID --region eastus
+
+# Managed Identity (Azure environments)
+azure-aitoolsconnect test --auth managed-identity --region eastus
+
+# Service Principal (automation)
+export AZURE_TENANT_ID=... AZURE_CLIENT_ID=... AZURE_CLIENT_SECRET=...
+azure-aitoolsconnect test --auth token --region eastus
+```
+
+### Which Method Should I Use?
+
+| Scenario | Method | Why |
+|----------|--------|-----|
+| Local development | Device Code | No Azure CLI, works everywhere |
+| Azure VM/App Service | Managed Identity | Secure, no credentials |
+| CI/CD Pipelines | Service Principal | Designed for automation |
+| Quick testing | API Key | Fastest setup |
+
+📖 **For detailed authentication setup and troubleshooting, see [USAGE.md](USAGE.md#authentication)**
 
 ## Exit Codes
 

@@ -290,6 +290,51 @@ Vision Service Scenarios
 
 ## Configuration
 
+### Configuration Structure Overview
+
+```mermaid
+flowchart LR
+    Config[config.toml] --> Global[Global Settings]
+    Config --> Auth[Authentication]
+    Config --> Services[Service Configs]
+    Config --> Inputs[Custom Inputs]
+
+    Global --> Cloud[Cloud: global/china]
+    Global --> Timeout[Timeout: 30s]
+    Global --> Format[Output Format]
+
+    Auth --> Method[Default Method]
+    Auth --> Entra[Service Principal]
+    Auth --> User[User Auth]
+
+    Method --> Key[key]
+    Method --> Token[token]
+    Method --> DC[device_code]
+    Method --> MI[managed_identity]
+    Method --> MT[manual_token]
+
+    Entra --> SP[Tenant/Client/Secret]
+    User --> UserTenant[Tenant for DC]
+    User --> UserToken[Bearer Token]
+    User --> UserMI[MI Client ID]
+
+    Services --> Speech[Speech]
+    Services --> Translator[Translator]
+    Services --> Language[Language]
+    Services --> Vision[Vision]
+    Services --> DocIntel[Document Intelligence]
+
+    Speech --> SpeechKey[API Key]
+    Speech --> SpeechRegion[Region]
+    Speech --> SpeechScenarios[Test Scenarios]
+
+    style Config fill:#4A90E2
+    style Auth fill:#7ED321
+    style Services fill:#F5A623
+    style Entra fill:#FFB6C1
+    style User fill:#87CEEB
+```
+
 ### Configuration File (config.toml)
 
 ```toml
@@ -301,13 +346,20 @@ output_format = "human"       # Output: "human", "json", "junit"
 
 # Authentication settings
 [auth]
-default_method = "key"        # "key", "token", or "both"
+default_method = "key"        # "key", "token", "device_code", "managed_identity", "manual_token", "both"
 
-# Entra ID (Azure AD) configuration for token auth
+# Service principal configuration (for "token" method)
 [auth.entra]
 tenant_id = "your-tenant-id"
-client_id = "your-client-id"
-client_secret = "your-client-secret"
+client_id = "your-service-principal-client-id"
+client_secret = "your-service-principal-secret"
+
+# User authentication (for device_code, managed_identity, manual_token)
+[auth.user]
+tenant_id = "your-tenant-id"              # Required for device_code
+# client_id = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"  # Optional
+# managed_identity_client_id = "..."     # For user-assigned MI
+# bearer_token = "eyJ0..."                # For manual token
 
 # Service configurations
 [services.speech]
@@ -359,10 +411,15 @@ export AZURE_TRANSLATOR_API_KEY="translator-key"
 export AZURE_LANGUAGE_API_KEY="language-key"
 export AZURE_VISION_API_KEY="vision-key"
 
-# Entra ID authentication
+# Service Principal (Entra ID) authentication
 export AZURE_TENANT_ID="your-tenant-id"
 export AZURE_CLIENT_ID="your-client-id"
 export AZURE_CLIENT_SECRET="your-client-secret"
+
+# User authentication (NEW)
+export AZURE_USER_TENANT_ID="your-tenant-id"        # For device code flow
+export AZURE_BEARER_TOKEN="eyJ0..."                  # For manual token
+export AZURE_MI_CLIENT_ID="your-uami-client-id"      # For user-assigned MI
 
 # Configuration file location
 export AZURE_AITOOLSCONNECT_CONFIG="/path/to/config.toml"
@@ -381,24 +438,158 @@ Configuration values are applied in this order (later overrides earlier):
 
 ## Authentication
 
-### API Key Authentication (Default)
+Azure AI Tools Connect supports multiple authentication methods to accommodate different scenarios:
+
+### Authentication Method Decision Flow
+
+```mermaid
+flowchart TD
+    Start[Choose Authentication] --> Q1{Where are<br/>you running?}
+
+    Q1 -->|Azure VM/App Service| MI[Managed Identity]
+    Q1 -->|Local Machine| Q2{Have Azure CLI?}
+    Q1 -->|CI/CD Pipeline| Q3{Which platform?}
+
+    Q2 -->|No| DC[Device Code Flow]
+    Q2 -->|Yes, but don't<br/>want to use| DC
+    Q2 -->|Yes| AZ[Azure CLI<br/>Not needed!<br/>Use Device Code]
+
+    Q3 -->|GitHub Actions<br/>Jenkins| SP[Service Principal]
+    Q3 -->|Azure DevOps<br/>Hosted Agent| MI
+
+    Q4{Quick test?} -->|Yes| KEY[API Key]
+    Q4 -->|No| DC
+
+    Start -->|Quick Test| KEY
+    Start -->|Advanced<br/>Debugging| MT[Manual Token]
+
+    style MI fill:#90EE90
+    style DC fill:#87CEEB
+    style SP fill:#FFB6C1
+    style KEY fill:#FFFFE0
+    style MT fill:#DDA0DD
+```
+
+### 1. API Key Authentication (Default)
+
+**Best for:** Quick testing, local development, proof-of-concepts
 
 The simplest method - uses the `Ocp-Apim-Subscription-Key` header.
 
 ```bash
 # Via CLI
-azure-aitoolsconnect test --api-key YOUR_KEY
+azure-aitoolsconnect test --api-key YOUR_KEY --region eastus
 
 # Via environment
 export AZURE_AI_API_KEY="YOUR_KEY"
-azure-aitoolsconnect test
+azure-aitoolsconnect test --region eastus
 
 # Via config file
+[auth]
+default_method = "key"
+
 [services.speech]
 api_key = "YOUR_KEY"
 ```
 
-### Entra ID Token Authentication
+### 2. Device Code Flow (User Authentication)
+
+**Best for:** Developers testing locally without Azure CLI, headless environments
+
+**No Azure CLI required!** Device code flow displays a code for you to enter at microsoft.com/devicelogin.
+
+```bash
+# Via CLI (requires tenant ID)
+azure-aitoolsconnect test \
+  --auth device-code \
+  --tenant YOUR_TENANT_ID \
+  --region eastus
+
+# Via environment variables
+export AZURE_USER_TENANT_ID="your-tenant-id"
+azure-aitoolsconnect test --auth device-code --region eastus
+
+# Via config file
+[auth]
+default_method = "device_code"
+
+[auth.user]
+tenant_id = "your-tenant-id"
+```
+
+**Interactive Flow:**
+```
+======================================================================
+  Azure Authentication Required
+======================================================================
+
+  Please visit:  https://microsoft.com/devicelogin
+
+  And enter code:  ABCD1234
+
+======================================================================
+
+Waiting for authentication...
+✓ Authentication successful!
+```
+
+### 3. Managed Identity (Azure Environments)
+
+**Best for:** Azure VMs, App Service, Container Apps, Azure DevOps hosted agents
+
+**Zero configuration** - automatically detected in Azure environments with managed identity enabled.
+
+```bash
+# System-assigned managed identity (auto-detected)
+azure-aitoolsconnect test --auth managed-identity --region eastus
+
+# User-assigned managed identity
+export AZURE_MI_CLIENT_ID="your-uami-client-id"
+azure-aitoolsconnect test --auth managed-identity --region eastus
+
+# Via config file
+[auth]
+default_method = "managed_identity"
+
+[auth.user]
+managed_identity_client_id = "your-uami-client-id"  # optional
+```
+
+**Supported Azure Environments:**
+- Azure Virtual Machines (IMDS)
+- Azure App Service
+- Azure Container Apps
+- Azure Functions
+- Azure DevOps hosted agents
+
+### 4. Manual Token (Advanced)
+
+**Best for:** Advanced troubleshooting, testing specific token scenarios
+
+Provide your own bearer token obtained through any method.
+
+```bash
+# Via CLI
+azure-aitoolsconnect test \
+  --auth manual-token \
+  --bearer-token "eyJ0..." \
+  --region eastus
+
+# Via environment
+export AZURE_BEARER_TOKEN="eyJ0eXAiOiJKV1QiLCJhbG..."
+azure-aitoolsconnect test --auth manual-token --region eastus
+
+# Via config file
+[auth]
+default_method = "manual_token"
+
+[auth.user]
+bearer_token = "eyJ0eXAiOiJKV1QiLCJhbG..."
+```
+
+### 5. Service Principal (Entra ID)
+
+**Best for:** Automation, CI/CD pipelines (GitHub Actions, Jenkins)
 
 Enterprise-grade OAuth 2.0 authentication using Azure Entra ID (formerly Azure AD).
 
@@ -407,9 +598,7 @@ Enterprise-grade OAuth 2.0 authentication using Azure Entra ID (formerly Azure A
 export AZURE_TENANT_ID="your-tenant-id"
 export AZURE_CLIENT_ID="your-client-id"
 export AZURE_CLIENT_SECRET="your-client-secret"
-
-# Specify token auth method
-azure-aitoolsconnect test --auth-method token
+azure-aitoolsconnect test --auth token --region eastus
 
 # Via config file
 [auth]
@@ -417,17 +606,45 @@ default_method = "token"
 
 [auth.entra]
 tenant_id = "your-tenant-id"
-client_id = "your-client-id"
-client_secret = "your-client-secret"
+client_id = "your-service-principal-client-id"
+client_secret = "your-service-principal-secret"
 ```
 
-### Dual Authentication (Both)
+### 6. Dual Authentication (Both)
 
-Try both methods - useful for testing failover scenarios:
+Try both API key and service principal - useful for testing failover scenarios:
 
 ```bash
-azure-aitoolsconnect test --auth-method both
+azure-aitoolsconnect test --auth both
 ```
+
+### Authentication Method Comparison
+
+| Method | Setup Complexity | Use Case | Azure CLI Required |
+|--------|-----------------|----------|-------------------|
+| **API Key** | Very Simple | Quick testing | No |
+| **Device Code** | Simple | Local development | No |
+| **Managed Identity** | Zero config | Azure environments | No |
+| **Manual Token** | Medium | Advanced testing | No |
+| **Service Principal** | Medium | Automation/CI/CD | No |
+
+### Troubleshooting Authentication
+
+**Device Code Flow:**
+- **Missing Tenant ID:** Error message "User authentication requires tenant ID"
+  - Solution: Provide `--tenant` argument or set `AZURE_USER_TENANT_ID`
+- **Timeout:** If authentication not completed within 15 minutes
+  - Solution: Run the command again and complete authentication promptly
+
+**Managed Identity:**
+- **Not Available:** "Managed identity not available in this environment"
+  - Solution: Ensure running on Azure resource with MI enabled, or use different auth method
+- **Permission Denied:** Token obtained but API calls fail
+  - Solution: Grant the managed identity access to Cognitive Services resources
+
+**Manual Token:**
+- **Invalid Token:** "Invalid bearer token" error
+  - Solution: Ensure token is valid, not expired, and has correct audience/scope
 
 ---
 

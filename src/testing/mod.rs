@@ -1,5 +1,5 @@
-use crate::auth::Credentials;
-use crate::config::{AuthMethod, Cloud, Config};
+use crate::auth::{AuthManager, Credentials};
+use crate::config::{AuthMethod, Cloud, Config, EntraConfig, UserAuthConfig};
 use crate::error::{AppError, Result};
 use crate::output::TestReport;
 use crate::services::{get_service, TestContext, TestInput};
@@ -27,6 +27,10 @@ pub struct TestRunnerConfig {
     pub input_file: Option<String>,
     /// Specific scenarios to run
     pub scenarios: Option<Vec<String>>,
+    /// Entra configuration
+    pub entra_config: Option<EntraConfig>,
+    /// User auth configuration
+    pub user_config: Option<UserAuthConfig>,
     /// Show verbose output
     pub verbose: bool,
     /// Quiet mode (no progress indicators)
@@ -46,6 +50,8 @@ impl TestRunnerConfig {
         endpoint: Option<String>,
         input_file: Option<String>,
         scenarios: Option<Vec<String>>,
+        tenant: Option<String>,
+        bearer_token: Option<String>,
         verbose: bool,
         quiet: bool,
     ) -> Self {
@@ -74,6 +80,16 @@ impl TestRunnerConfig {
             None
         }).unwrap_or_else(|| "eastus".to_string());
 
+        // Build user auth config
+        let mut user_config = config.auth.user.clone();
+        // Override with CLI args if provided
+        if tenant.is_some() {
+            user_config.tenant_id = tenant;
+        }
+        if bearer_token.is_some() {
+            user_config.bearer_token = bearer_token;
+        }
+
         Self {
             services,
             api_key,
@@ -84,6 +100,8 @@ impl TestRunnerConfig {
             endpoint,
             input_file: input_file.or(config.custom_inputs.audio_file.clone()),
             scenarios,
+            entra_config: Some(config.auth.entra.clone()),
+            user_config: Some(user_config),
             verbose,
             quiet,
         }
@@ -141,29 +159,24 @@ impl TestRunner {
     }
 
     /// Get credentials based on auth method
-    fn get_credentials(&self) -> Result<Credentials> {
-        match self.config.auth_method {
-            AuthMethod::Key | AuthMethod::Both => {
-                let key = self
-                    .config
-                    .api_key
-                    .clone()
-                    .ok_or_else(|| AppError::Auth("API key not provided".to_string()))?;
-                Ok(Credentials::ApiKey(key))
-            }
-            AuthMethod::Token => {
-                // For token auth, we'd need to implement the full token flow
-                // For now, return an error if no API key
-                Err(AppError::Auth(
-                    "Token auth requires Entra ID configuration".to_string(),
-                ))
-            }
-        }
+    async fn get_credentials(&self) -> Result<Credentials> {
+        // Create AuthManager with the current configuration
+        let auth_manager = AuthManager::new(
+            self.config.api_key.clone(),
+            self.config.entra_config.as_ref(),
+            self.config.user_config.as_ref(),
+            self.config.cloud,
+            self.config.auth_method,
+        )?;
+
+        // Get the provider and fetch credentials
+        let provider = auth_manager.get_provider()?;
+        provider.get_credentials().await
     }
 
     /// Run tests for all configured services
     pub async fn run(&self) -> Result<TestReport> {
-        let credentials = self.get_credentials()?;
+        let credentials = self.get_credentials().await?;
         let input = self.load_input()?;
 
         let mut all_results = Vec::new();

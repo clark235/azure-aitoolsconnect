@@ -64,13 +64,29 @@ pub enum AppError {
 
     #[error("Timeout: {0}")]
     Timeout(String),
+
+    #[error("Device code authentication failed: {0}")]
+    DeviceCodeAuthFailed(String),
+
+    #[error("Managed identity not available: {0}")]
+    ManagedIdentityNotAvailable(String),
+
+    #[error("Invalid bearer token: {0}")]
+    InvalidBearerToken(String),
+
+    #[error("User authentication requires tenant ID")]
+    MissingTenantId,
 }
 
 impl AppError {
     pub fn exit_code(&self) -> ExitCode {
         match self {
             AppError::Config(_) | AppError::TomlParse(_) => ExitCode::ConfigError,
-            AppError::Auth(_) => ExitCode::AuthFailure,
+            AppError::Auth(_)
+            | AppError::DeviceCodeAuthFailed(_)
+            | AppError::ManagedIdentityNotAvailable(_)
+            | AppError::InvalidBearerToken(_)
+            | AppError::MissingTenantId => ExitCode::AuthFailure,
             AppError::Network(_) | AppError::Http(_) | AppError::Timeout(_) => {
                 ExitCode::NetworkFailure
             }

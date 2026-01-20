@@ -67,6 +67,8 @@ async fn run_test(
         args.endpoint,
         args.input_file.map(|p| p.to_string_lossy().to_string()),
         args.scenarios,
+        args.tenant,
+        args.bearer_token,
         verbose,
         quiet,
     );

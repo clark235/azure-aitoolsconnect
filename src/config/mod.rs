@@ -105,6 +105,12 @@ pub enum AuthMethod {
     Key,
     Token,
     Both,
+    #[serde(rename = "device_code")]
+    DeviceCode,
+    #[serde(rename = "managed_identity")]
+    ManagedIdentity,
+    #[serde(rename = "manual_token")]
+    ManualToken,
 }
 
 impl std::fmt::Display for AuthMethod {
@@ -113,6 +119,9 @@ impl std::fmt::Display for AuthMethod {
             AuthMethod::Key => write!(f, "key"),
             AuthMethod::Token => write!(f, "token"),
             AuthMethod::Both => write!(f, "both"),
+            AuthMethod::DeviceCode => write!(f, "device-code"),
+            AuthMethod::ManagedIdentity => write!(f, "managed-identity"),
+            AuthMethod::ManualToken => write!(f, "manual-token"),
         }
     }
 }
@@ -125,6 +134,13 @@ impl std::str::FromStr for AuthMethod {
             "key" | "apikey" | "api-key" => Ok(AuthMethod::Key),
             "token" | "entra" | "aad" | "bearer" => Ok(AuthMethod::Token),
             "both" | "all" => Ok(AuthMethod::Both),
+            "device-code" | "device_code" | "devicecode" => Ok(AuthMethod::DeviceCode),
+            "managed-identity" | "managed_identity" | "managedidentity" | "mi" => {
+                Ok(AuthMethod::ManagedIdentity)
+            }
+            "manual-token" | "manual_token" | "manualtoken" | "manual" => {
+                Ok(AuthMethod::ManualToken)
+            }
             _ => Err(AppError::Config(format!("Unknown auth method: {}", s))),
         }
     }
@@ -153,6 +169,19 @@ pub struct EntraConfig {
     pub client_secret: Option<String>,
 }
 
+/// User authentication configuration (device code, managed identity, manual token)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UserAuthConfig {
+    /// Tenant ID for device code flow
+    pub tenant_id: Option<String>,
+    /// Custom public client ID (defaults to Azure CLI client ID if not specified)
+    pub client_id: Option<String>,
+    /// Client ID for user-assigned managed identity
+    pub managed_identity_client_id: Option<String>,
+    /// Bearer token for manual token authentication
+    pub bearer_token: Option<String>,
+}
+
 /// Authentication configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuthConfig {
@@ -160,6 +189,8 @@ pub struct AuthConfig {
     pub default_method: AuthMethod,
     #[serde(default)]
     pub entra: EntraConfig,
+    #[serde(default)]
+    pub user: UserAuthConfig,
 }
 
 /// Service-specific configuration
@@ -282,6 +313,7 @@ impl Config {
             auth: AuthConfig {
                 default_method: AuthMethod::Key,
                 entra: EntraConfig::default(),
+                user: UserAuthConfig::default(),
             },
             services,
             custom_inputs: CustomInputs::default(),
@@ -327,7 +359,7 @@ impl Config {
             }
         }
 
-        // Entra ID settings
+        // Entra ID settings (service principal)
         if let Ok(tenant) = std::env::var("AZURE_TENANT_ID") {
             self.auth.entra.tenant_id = Some(tenant);
         }
@@ -336,6 +368,17 @@ impl Config {
         }
         if let Ok(client_secret) = std::env::var("AZURE_CLIENT_SECRET") {
             self.auth.entra.client_secret = Some(client_secret);
+        }
+
+        // User authentication settings
+        if let Ok(tenant) = std::env::var("AZURE_USER_TENANT_ID") {
+            self.auth.user.tenant_id = Some(tenant);
+        }
+        if let Ok(token) = std::env::var("AZURE_BEARER_TOKEN") {
+            self.auth.user.bearer_token = Some(token);
+        }
+        if let Ok(client_id) = std::env::var("AZURE_MI_CLIENT_ID") {
+            self.auth.user.managed_identity_client_id = Some(client_id);
         }
 
         // Cloud setting
