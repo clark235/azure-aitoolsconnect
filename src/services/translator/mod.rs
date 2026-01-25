@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::config::Cloud;
+use crate::error::sanitize_error;
 use crate::services::{measure_time, AzureService, InputType, TestContext, TestResult, TestScenario};
 
 /// Translator Service implementation
@@ -27,8 +28,8 @@ struct TranslateRequest {
 #[derive(Debug, serde::Deserialize)]
 struct DetectResponse {
     language: String,
-    #[allow(dead_code)]
-    score: f64,
+    #[serde(rename = "score")]
+    _score: f64,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -64,6 +65,13 @@ impl AzureService for TranslatorService {
 
     fn list_scenarios(&self) -> Vec<TestScenario> {
         vec![
+            TestScenario {
+                id: "endpoint_check",
+                name: "Endpoint Reachability",
+                description: "Verify endpoint DNS, TLS, and connectivity",
+                requires_input: false,
+                input_type: None,
+            },
             TestScenario {
                 id: "languages",
                 name: "Get Languages",
@@ -107,6 +115,7 @@ impl AzureService for TranslatorService {
         };
 
         match scenario_id {
+            "endpoint_check" => self.test_endpoint_check(context, &scenario).await,
             "languages" => self.test_languages(context, &scenario).await,
             "detect" => self.test_detect(context, &scenario).await,
             "translate" => self.test_translate(context, &scenario).await,
@@ -121,6 +130,49 @@ impl AzureService for TranslatorService {
 }
 
 impl TranslatorService {
+    async fn test_endpoint_check(&self, context: &TestContext, scenario: &TestScenario) -> TestResult {
+        let endpoint = self.get_endpoint(&context.region, context.cloud, context.endpoint.as_deref());
+
+        let (result, duration_ms) = measure_time(async {
+            match context.client.get(&endpoint).send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.as_u16() < 500 {
+                        Ok(format!("Endpoint reachable (HTTP {})", status))
+                    } else {
+                        let body = response.text().await.unwrap_or_default();
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
+                    }
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("dns") || msg.contains("resolve") {
+                        Err((0, format!("DNS resolution failed: {}", msg)))
+                    } else if msg.contains("timed out") || msg.contains("timeout") {
+                        Err((0, format!("Connection timed out: {}", msg)))
+                    } else if msg.contains("certificate") || msg.contains("ssl") || msg.contains("tls") {
+                        Err((0, format!("TLS/SSL error: {}", msg)))
+                    } else {
+                        Err((0, format!("Connection failed: {}", msg)))
+                    }
+                }
+            }
+        })
+        .await;
+
+        match result {
+            Ok(details) => TestResult::success(scenario.id, scenario.name, duration_ms)
+                .with_details(details),
+            Err((status, error)) => {
+                let mut result = TestResult::failure(scenario.id, scenario.name, duration_ms, error);
+                if status > 0 {
+                    result = result.with_http_status(status);
+                }
+                result
+            }
+        }
+    }
+
     async fn test_languages(&self, context: &TestContext, scenario: &TestScenario) -> TestResult {
         let endpoint = self.get_endpoint(&context.region, context.cloud, context.endpoint.as_deref());
         let url = format!("{}/languages?api-version=3.0", endpoint);
@@ -140,7 +192,7 @@ impl TranslatorService {
                         Ok(format!("{} translation languages available", translation_count))
                     } else {
                         let body = response.text().await.unwrap_or_default();
-                        Err((status.as_u16(), format!("HTTP {}: {}", status, body)))
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
                     }
                 }
                 Err(e) => Err((0, format!("Request failed: {}", e))),
@@ -200,7 +252,7 @@ impl TranslatorService {
                         }
                     } else {
                         let body = response.text().await.unwrap_or_default();
-                        Err((status.as_u16(), format!("HTTP {}: {}", status, body)))
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
                     }
                 }
                 Err(e) => Err((0, format!("Request failed: {}", e))),
@@ -268,7 +320,7 @@ impl TranslatorService {
                         }
                     } else {
                         let body = response.text().await.unwrap_or_default();
-                        Err((status.as_u16(), format!("HTTP {}: {}", status, body)))
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
                     }
                 }
                 Err(e) => Err((0, format!("Request failed: {}", e))),

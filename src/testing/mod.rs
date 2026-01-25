@@ -1,5 +1,5 @@
 use crate::auth::{AuthManager, Credentials};
-use crate::config::{AuthMethod, Cloud, Config, EntraConfig, UserAuthConfig};
+use crate::config::{AuthMethod, Cloud, Config, EntraConfig, UserAuthConfig, MAX_INPUT_FILE_SIZE};
 use crate::error::{AppError, Result};
 use crate::output::TestReport;
 use crate::services::{get_service, TestContext, TestInput};
@@ -39,6 +39,7 @@ pub struct TestRunnerConfig {
 
 impl TestRunnerConfig {
     /// Create from CLI args and config file
+    #[allow(clippy::too_many_arguments)]
     pub fn from_config(
         config: &Config,
         services: Vec<String>,
@@ -120,18 +121,33 @@ impl TestRunner {
 
     /// Load input file if specified
     fn load_input(&self) -> Result<Option<TestInput>> {
-        let path = match &self.config.input_file {
+        let path_str = match &self.config.input_file {
             Some(p) => p,
             None => return Ok(None),
         };
 
-        let path = Path::new(path);
-        if !path.exists() {
-            return Err(AppError::FileNotFound(path.display().to_string()));
+        let path = Path::new(path_str);
+
+        // Canonicalize to resolve symlinks and ../ sequences (prevents path traversal)
+        let canonical = path.canonicalize().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                AppError::FileNotFound(path_str.clone())
+            } else {
+                AppError::InvalidInput(format!("Invalid path '{}': {}", path_str, e))
+            }
+        })?;
+
+        // Check file size limit
+        let metadata = std::fs::metadata(&canonical)?;
+        if metadata.len() > MAX_INPUT_FILE_SIZE {
+            return Err(AppError::InvalidInput(format!(
+                "File exceeds 10MB limit ({} bytes)",
+                metadata.len()
+            )));
         }
 
-        let data = std::fs::read(path)?;
-        let extension = path
+        let data = std::fs::read(&canonical)?;
+        let extension = canonical
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
@@ -153,7 +169,7 @@ impl TestRunner {
         Ok(Some(TestInput {
             data,
             content_type: content_type.to_string(),
-            file_name: path.file_name().map(|n| n.to_string_lossy().to_string()),
+            file_name: canonical.file_name().map(|n| n.to_string_lossy().to_string()),
             text: None,
         }))
     }

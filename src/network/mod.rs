@@ -222,12 +222,10 @@ pub fn format_diagnostics(diagnostics: &NetworkDiagnostics, use_colors: bool) ->
                 } else {
                     "[OK]".to_string()
                 }
+            } else if use_colors {
+                style("\u{2717}").red().to_string()
             } else {
-                if use_colors {
-                    style("\u{2717}").red().to_string()
-                } else {
-                    "[FAIL]".to_string()
-                }
+                "[FAIL]".to_string()
             };
 
             output.push_str(&format!(
@@ -263,12 +261,10 @@ pub fn format_diagnostics(diagnostics: &NetworkDiagnostics, use_colors: bool) ->
                 } else {
                     "[OK]".to_string()
                 }
+            } else if use_colors {
+                style("\u{2717}").red().to_string()
             } else {
-                if use_colors {
-                    style("\u{2717}").red().to_string()
-                } else {
-                    "[FAIL]".to_string()
-                }
+                "[FAIL]".to_string()
             };
 
             output.push_str(&format!(
@@ -298,12 +294,10 @@ pub fn format_diagnostics(diagnostics: &NetworkDiagnostics, use_colors: bool) ->
                 } else {
                     "[OK]".to_string()
                 }
+            } else if use_colors {
+                style("\u{2717}").red().to_string()
             } else {
-                if use_colors {
-                    style("\u{2717}").red().to_string()
-                } else {
-                    "[FAIL]".to_string()
-                }
+                "[FAIL]".to_string()
             };
 
             output.push_str(&format!(

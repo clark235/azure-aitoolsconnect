@@ -301,15 +301,13 @@ pub trait AzureService: Send + Sync {
             }
 
             // Check if we have required input
-            if scenario.requires_input {
-                if context.input.is_none() {
-                    results.push(TestResult::skipped(
-                        scenario.id,
-                        scenario.name,
-                        format!("Requires {} input", scenario.input_type.map(|t| t.to_string()).unwrap_or_default()),
-                    ));
-                    continue;
-                }
+            if scenario.requires_input && context.input.is_none() {
+                results.push(TestResult::skipped(
+                    scenario.id,
+                    scenario.name,
+                    format!("Requires {} input", scenario.input_type.map(|t| t.to_string()).unwrap_or_default()),
+                ));
+                continue;
             }
 
             let result = self.run_scenario(scenario.id, context).await;
@@ -336,15 +334,15 @@ where
     (result, duration_ms)
 }
 
+/// List of all supported service names
+const SERVICE_NAMES: &[&str] = &["speech", "translator", "language", "vision", "document_intelligence"];
+
 /// Get all available services
 pub fn get_all_services() -> Vec<Box<dyn AzureService>> {
-    vec![
-        Box::new(speech::SpeechService::new()),
-        Box::new(translator::TranslatorService::new()),
-        Box::new(language::LanguageService::new()),
-        Box::new(vision::VisionService::new()),
-        Box::new(document_intelligence::DocumentIntelligenceService::new()),
-    ]
+    SERVICE_NAMES
+        .iter()
+        .filter_map(|name| get_service(name))
+        .collect()
 }
 
 /// Get a service by name

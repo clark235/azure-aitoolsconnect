@@ -132,7 +132,7 @@ async fn run_diagnose(
     match args.output {
         azure_aitoolsconnect::cli::OutputFormatArg::Json => {
             let json = serde_json::to_string_pretty(&diagnostics)
-                .map_err(|e| azure_aitoolsconnect::AppError::Json(e))?;
+                .map_err(azure_aitoolsconnect::AppError::Json)?;
             println!("{}", json);
         }
         _ => {

@@ -4,6 +4,12 @@ use std::path::Path;
 
 use crate::error::{AppError, Result};
 
+/// Default request timeout in seconds
+pub const DEFAULT_TIMEOUT_SECS: u64 = 30;
+
+/// Maximum input file size in bytes (10MB)
+pub const MAX_INPUT_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
 /// Cloud environment
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -31,6 +37,15 @@ impl Cloud {
             Cloud::China => {
                 format!("https://{}.api.cognitive.azure.cn/sts/v1.0/issueToken", region)
             }
+        }
+    }
+
+    /// Get the cognitive services token endpoint, using a custom endpoint if provided
+    pub fn cognitive_token_endpoint_for(&self, region: &str, custom_endpoint: Option<&str>) -> String {
+        if let Some(endpoint) = custom_endpoint {
+            format!("{}/sts/v1.0/issueToken", endpoint.trim_end_matches('/'))
+        } else {
+            self.cognitive_token_endpoint(region)
         }
     }
 
@@ -158,7 +173,7 @@ pub struct GlobalConfig {
 }
 
 fn default_timeout() -> u64 {
-    30
+    DEFAULT_TIMEOUT_SECS
 }
 
 /// Entra ID (Azure AD) authentication configuration
@@ -256,7 +271,7 @@ impl Config {
                 region: Some("eastus".to_string()),
                 api_key: None,
                 endpoint: None,
-                test_scenarios: vec!["voices_list".to_string(), "token_exchange".to_string()],
+                test_scenarios: vec!["endpoint_check".to_string(), "voices_list".to_string(), "token_exchange".to_string(), "tts".to_string()],
             },
         );
 
@@ -307,7 +322,7 @@ impl Config {
         Config {
             global: GlobalConfig {
                 cloud: Cloud::Global,
-                timeout_seconds: 30,
+                timeout_seconds: DEFAULT_TIMEOUT_SECS,
                 output_format: OutputFormat::Human,
             },
             auth: AuthConfig {
@@ -346,7 +361,16 @@ impl Config {
             }
         }
 
-        // Service-specific API keys
+        // Global endpoint (custom subdomain for multi-service resources)
+        if let Ok(endpoint) = std::env::var("AZURE_AI_ENDPOINT") {
+            for service in self.services.values_mut() {
+                if service.endpoint.is_none() {
+                    service.endpoint = Some(endpoint.clone());
+                }
+            }
+        }
+
+        // Service-specific API keys and endpoints
         for (name, service) in self.services.iter_mut() {
             let env_name = format!("AZURE_{}_API_KEY", name.to_uppercase().replace('-', "_"));
             if let Ok(key) = std::env::var(&env_name) {
@@ -356,6 +380,11 @@ impl Config {
             let env_region = format!("AZURE_{}_REGION", name.to_uppercase().replace('-', "_"));
             if let Ok(region) = std::env::var(&env_region) {
                 service.region = Some(region);
+            }
+
+            let env_endpoint = format!("AZURE_{}_ENDPOINT", name.to_uppercase().replace('-', "_"));
+            if let Ok(endpoint) = std::env::var(&env_endpoint) {
+                service.endpoint = Some(endpoint);
             }
         }
 
@@ -459,7 +488,31 @@ mod tests {
     fn test_default_config() {
         let config = Config::default_config();
         assert_eq!(config.global.cloud, Cloud::Global);
-        assert_eq!(config.global.timeout_seconds, 30);
+        assert_eq!(config.global.timeout_seconds, DEFAULT_TIMEOUT_SECS);
         assert!(config.services.contains_key("speech"));
+    }
+
+    #[test]
+    fn test_token_endpoint_custom_domain() {
+        let ep = Cloud::Global.cognitive_token_endpoint_for("eastus", Some("https://myservice.cognitiveservices.azure.com"));
+        assert_eq!(ep, "https://myservice.cognitiveservices.azure.com/sts/v1.0/issueToken");
+    }
+
+    #[test]
+    fn test_token_endpoint_regional_fallback() {
+        let ep = Cloud::Global.cognitive_token_endpoint_for("eastus", None);
+        assert_eq!(ep, "https://eastus.api.cognitive.microsoft.com/sts/v1.0/issueToken");
+    }
+
+    #[test]
+    fn test_token_endpoint_china_fallback() {
+        let ep = Cloud::China.cognitive_token_endpoint_for("chinaeast2", None);
+        assert_eq!(ep, "https://chinaeast2.api.cognitive.azure.cn/sts/v1.0/issueToken");
+    }
+
+    #[test]
+    fn test_token_endpoint_trailing_slash() {
+        let ep = Cloud::Global.cognitive_token_endpoint_for("eastus", Some("https://myservice.cognitiveservices.azure.com/"));
+        assert_eq!(ep, "https://myservice.cognitiveservices.azure.com/sts/v1.0/issueToken");
     }
 }

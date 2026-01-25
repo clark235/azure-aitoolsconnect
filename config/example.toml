@@ -1,5 +1,13 @@
 # Azure AI Services Connectivity Testing Tool Configuration
 # Copy this file to config.toml and fill in your credentials
+#
+# IMPORTANT: For multi-service CognitiveServices resources, you need:
+#   1. The custom subdomain endpoint (e.g., https://your-resource.cognitiveservices.azure.com)
+#   2. The resource's actual region (e.g., swedencentral, eastus)
+#   3. One API key works for all services
+#
+# See samples/config-multiservice.toml for a complete multi-service example.
+# See samples/config-dedicated.toml for dedicated service resource examples.
 
 [global]
 # Cloud environment: "global" or "china"
@@ -41,77 +49,151 @@ default_method = "key"
 # Optional: Bearer token for manual token authentication
 # bearer_token = "eyJ0eXAiOiJKV1QiLCJhbG..."
 
-# Speech Service configuration
+# =============================================================================
+# Speech Service
+# =============================================================================
+# Endpoint patterns:
+#   - Custom subdomain: https://your-resource.cognitiveservices.azure.com
+#     Used for: token_exchange, stt_short (Fast Transcription API)
+#   - TTS dedicated: https://{region}.tts.speech.microsoft.com
+#     Used for: voices_list, tts
+#   - STT dedicated: https://{region}.stt.speech.microsoft.com
+#     Used for: stt_rest
+#
+# The region is ALWAYS required for dedicated TTS/STT endpoints.
 [services.speech]
 enabled = true
-region = "eastus"
-# api_key = "your-speech-api-key"  # Or set AZURE_SPEECH_API_KEY env var
-test_scenarios = ["voices_list", "token_exchange", "tts"]
+region = "swedencentral"  # Must match your resource's region
+# endpoint = "https://your-resource.cognitiveservices.azure.com"  # Custom subdomain
+# api_key = "your-api-key"  # Or set AZURE_SPEECH_API_KEY env var
+test_scenarios = [
+    "endpoint_check",    # Verify endpoint connectivity
+    "voices_list",       # List available TTS voices (uses TTS endpoint)
+    "token_exchange",    # Exchange API key for short-lived token
+    "tts",               # Text-to-speech synthesis (uses TTS endpoint)
+    "stt_short",         # Fast Transcription API (uses custom subdomain)
+    "stt_rest",          # Traditional STT REST API (uses STT endpoint)
+]
 
-# Translator Service configuration
+# =============================================================================
+# Translator Service
+# =============================================================================
+# Uses global endpoint: https://api.cognitive.microsofttranslator.com
+# IMPORTANT: When using a multi-service key, you MUST set the region header
+# to your resource's actual region (not "global").
 [services.translator]
 enabled = true
-region = "global"
-# api_key = "your-translator-api-key"  # Or set AZURE_TRANSLATOR_API_KEY env var
-test_scenarios = ["languages", "detect", "translate"]
+region = "swedencentral"  # Set to your resource's region for multi-service keys
+# api_key = "your-api-key"  # Or set AZURE_TRANSLATOR_API_KEY env var
+test_scenarios = [
+    "endpoint_check",  # Verify endpoint connectivity
+    "languages",       # Get supported languages (no auth required)
+    "detect",          # Detect language of text
+    "translate",       # Translate text
+]
 
-# Language Service configuration
+# =============================================================================
+# Language Service
+# =============================================================================
+# Uses custom subdomain: https://your-resource.cognitiveservices.azure.com
+# Or regional: https://{region}.api.cognitive.microsoft.com
 [services.language]
 enabled = true
-region = "eastus"
-# api_key = "your-language-api-key"  # Or set AZURE_LANGUAGE_API_KEY env var
-test_scenarios = ["sentiment", "language_detection", "entities", "key_phrases"]
+region = "swedencentral"
+# endpoint = "https://your-resource.cognitiveservices.azure.com"
+# api_key = "your-api-key"  # Or set AZURE_LANGUAGE_API_KEY env var
+test_scenarios = [
+    "sentiment",           # Sentiment analysis
+    "language_detection",  # Detect language
+    "entities",            # Named entity recognition (NER)
+    "key_phrases",         # Key phrase extraction
+    "pii_detection",       # PII entity detection (SSN, email, phone, etc.)
+    "entity_linking",      # Link entities to Wikipedia
+    "summarization",       # Abstractive summarization (async)
+]
 
-# Vision Service configuration
+# =============================================================================
+# Vision Service
+# =============================================================================
+# Uses custom subdomain: https://your-resource.cognitiveservices.azure.com
+# Or regional: https://{region}.api.cognitive.microsoft.com
+#
+# NOTE: caption/denseCaptions features are NOT available in all regions.
+# The default analyze_image uses tags,objects,read which work everywhere.
 [services.vision]
 enabled = true
-region = "eastus"
-# api_key = "your-vision-api-key"  # Or set AZURE_VISION_API_KEY env var
-test_scenarios = ["analyze_image", "read_text", "detect_objects"]
+region = "swedencentral"
+# endpoint = "https://your-resource.cognitiveservices.azure.com"
+# api_key = "your-api-key"  # Or set AZURE_VISION_API_KEY env var
+test_scenarios = [
+    "analyze_image",      # Tags, objects, and OCR (region-safe features)
+    "read_text",          # OCR text extraction
+    "detect_objects",     # Object detection
+    "smart_crops",        # Smart thumbnail cropping
+    "people_detection",   # Detect people in images
+]
 
-# Document Intelligence Service configuration
+# =============================================================================
+# Document Intelligence Service
+# =============================================================================
+# Uses custom subdomain: https://your-resource.cognitiveservices.azure.com
+# Or regional: https://{region}.api.cognitive.microsoft.com
 [services.document_intelligence]
 enabled = true
-region = "eastus"
-# api_key = "your-doc-intel-api-key"  # Or set AZURE_DOCUMENT_INTELLIGENCE_API_KEY env var
-test_scenarios = ["layout", "read"]
+region = "swedencentral"
+# endpoint = "https://your-resource.cognitiveservices.azure.com"
+# api_key = "your-api-key"  # Or set AZURE_DOCUMENT_INTELLIGENCE_API_KEY env var
+test_scenarios = [
+    "layout",  # Document layout analysis
+    "read",    # Document text extraction
+]
 
-# Custom input files for testing
+# =============================================================================
+# Custom Input Files
+# =============================================================================
+# Provide custom files for testing. If not specified, embedded test data is used.
 [custom_inputs]
-# audio_file = "./samples/test.wav"
-# document_file = "./samples/test.pdf"
-# image_file = "./samples/test.png"
+# audio_file = "./samples/test-speech.wav"
+# document_file = "./samples/test-document.pdf"
+# image_file = "./samples/test-image.png"
 # text = "Sample text for language analysis"
 
 # =============================================================================
-# Environment Variables
+# Environment Variables Reference
 # =============================================================================
-# The following environment variables can be used instead of config file values:
+# Global settings (apply to all services):
+#   AZURE_AI_API_KEY      - API key for all services
+#   AZURE_AI_ENDPOINT     - Custom subdomain endpoint for all services
+#   AZURE_REGION          - Default region for all services
+#   AZURE_CLOUD           - Cloud environment (global/china)
 #
-# AZURE_AI_API_KEY          - Global API key (used for all services if specific key not set)
-# AZURE_REGION              - Global region (used if service region not set)
-# AZURE_CLOUD               - Cloud environment (global/china)
+# Service-specific API keys (override global):
+#   AZURE_SPEECH_API_KEY
+#   AZURE_TRANSLATOR_API_KEY
+#   AZURE_LANGUAGE_API_KEY
+#   AZURE_VISION_API_KEY
+#   AZURE_DOCUMENT_INTELLIGENCE_API_KEY
 #
-# Service-specific API keys:
-# AZURE_SPEECH_API_KEY
-# AZURE_TRANSLATOR_API_KEY
-# AZURE_LANGUAGE_API_KEY
-# AZURE_VISION_API_KEY
-# AZURE_DOCUMENT_INTELLIGENCE_API_KEY
+# Service-specific regions (override global):
+#   AZURE_SPEECH_REGION
+#   AZURE_TRANSLATOR_REGION
+#   AZURE_LANGUAGE_REGION
+#   AZURE_VISION_REGION
+#   AZURE_DOCUMENT_INTELLIGENCE_REGION
 #
-# Service-specific regions:
-# AZURE_SPEECH_REGION
-# AZURE_TRANSLATOR_REGION
-# AZURE_LANGUAGE_REGION
-# AZURE_VISION_REGION
-# AZURE_DOCUMENT_INTELLIGENCE_REGION
+# Service-specific endpoints (override global):
+#   AZURE_SPEECH_ENDPOINT
+#   AZURE_TRANSLATOR_ENDPOINT
+#   AZURE_LANGUAGE_ENDPOINT
+#   AZURE_VISION_ENDPOINT
+#   AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
 #
 # Service Principal (Entra ID/Azure AD):
-# AZURE_TENANT_ID
-# AZURE_CLIENT_ID
-# AZURE_CLIENT_SECRET
+#   AZURE_TENANT_ID
+#   AZURE_CLIENT_ID
+#   AZURE_CLIENT_SECRET
 #
-# User Authentication (NEW):
-# AZURE_USER_TENANT_ID          - Tenant ID for device code flow
-# AZURE_BEARER_TOKEN            - Manual bearer token
-# AZURE_MI_CLIENT_ID            - Client ID for user-assigned managed identity
+# User Authentication:
+#   AZURE_USER_TENANT_ID          - Tenant ID for device code flow
+#   AZURE_BEARER_TOKEN            - Manual bearer token
+#   AZURE_MI_CLIENT_ID            - Client ID for user-assigned managed identity

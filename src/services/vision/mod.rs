@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::config::Cloud;
+use crate::error::sanitize_error;
 use crate::services::{measure_time, AzureService, InputType, TestContext, TestResult, TestScenario};
 
 /// Vision Service implementation
@@ -52,7 +53,7 @@ impl AzureService for VisionService {
             TestScenario {
                 id: "analyze_image",
                 name: "Analyze Image",
-                description: "Extract tags, categories, and descriptions from image",
+                description: "Extract tags, objects, and text from image",
                 requires_input: false,
                 input_type: Some(InputType::Image),
             },
@@ -67,6 +68,20 @@ impl AzureService for VisionService {
                 id: "detect_objects",
                 name: "Detect Objects",
                 description: "Detect and locate objects in image",
+                requires_input: false,
+                input_type: Some(InputType::Image),
+            },
+            TestScenario {
+                id: "smart_crops",
+                name: "Smart Crops",
+                description: "Generate smart-cropped thumbnails",
+                requires_input: false,
+                input_type: Some(InputType::Image),
+            },
+            TestScenario {
+                id: "people_detection",
+                name: "People Detection",
+                description: "Detect people in image",
                 requires_input: false,
                 input_type: Some(InputType::Image),
             },
@@ -95,6 +110,8 @@ impl AzureService for VisionService {
             "analyze_image" => self.test_analyze_image(context, &scenario).await,
             "read_text" => self.test_read_text(context, &scenario).await,
             "detect_objects" => self.test_detect_objects(context, &scenario).await,
+            "smart_crops" => self.test_smart_crops(context, &scenario).await,
+            "people_detection" => self.test_people_detection(context, &scenario).await,
             _ => TestResult::failure(
                 scenario_id,
                 scenario.name,
@@ -121,8 +138,10 @@ impl VisionService {
         scenario: &TestScenario,
     ) -> TestResult {
         let endpoint = self.get_endpoint(&context.region, context.cloud, context.endpoint.as_deref());
+        // Note: Using tags,objects,read features which are available in all regions.
+        // caption/denseCaptions are NOT available in some regions (e.g., swedencentral).
         let url = format!(
-            "{}/computervision/imageanalysis:analyze?api-version=2024-02-01&features=tags,caption,read",
+            "{}/computervision/imageanalysis:analyze?api-version=2024-02-01&features=tags,objects,read",
             endpoint
         );
 
@@ -142,14 +161,15 @@ impl VisionService {
                     if status.is_success() {
                         let body: serde_json::Value = response.json().await.unwrap_or_default();
                         let has_tags = body.get("tagsResult").is_some();
-                        let has_caption = body.get("captionResult").is_some();
+                        let has_objects = body.get("objectsResult").is_some();
+                        let has_read = body.get("readResult").is_some();
                         Ok(format!(
-                            "Analysis complete (tags: {}, caption: {})",
-                            has_tags, has_caption
+                            "Analysis complete (tags: {}, objects: {}, read: {})",
+                            has_tags, has_objects, has_read
                         ))
                     } else {
                         let body = response.text().await.unwrap_or_default();
-                        Err((status.as_u16(), format!("HTTP {}: {}", status, body)))
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
                     }
                 }
                 Err(e) => Err((0, format!("Request failed: {}", e))),
@@ -201,7 +221,7 @@ impl VisionService {
                         Ok(format!("Read complete: {} text blocks found", blocks))
                     } else {
                         let body = response.text().await.unwrap_or_default();
-                        Err((status.as_u16(), format!("HTTP {}: {}", status, body)))
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
                     }
                 }
                 Err(e) => Err((0, format!("Request failed: {}", e))),
@@ -257,7 +277,120 @@ impl VisionService {
                         Ok(format!("Detection complete: {} objects found", objects))
                     } else {
                         let body = response.text().await.unwrap_or_default();
-                        Err((status.as_u16(), format!("HTTP {}: {}", status, body)))
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
+                    }
+                }
+                Err(e) => Err((0, format!("Request failed: {}", e))),
+            }
+        })
+        .await;
+
+        match result {
+            Ok(details) => TestResult::success(scenario.id, scenario.name, duration_ms)
+                .with_details(details),
+            Err((status, error)) => {
+                let mut result = TestResult::failure(scenario.id, scenario.name, duration_ms, error);
+                if status > 0 {
+                    result = result.with_http_status(status);
+                }
+                result
+            }
+        }
+    }
+
+    async fn test_smart_crops(
+        &self,
+        context: &TestContext,
+        scenario: &TestScenario,
+    ) -> TestResult {
+        let endpoint = self.get_endpoint(&context.region, context.cloud, context.endpoint.as_deref());
+        // smartCrops requires aspect ratios - using common thumbnail ratios
+        let url = format!(
+            "{}/computervision/imageanalysis:analyze?api-version=2024-02-01&features=smartCrops&smartCrops-aspect-ratios=1.0,1.5",
+            endpoint
+        );
+
+        let (image_data, content_type) = Self::get_image_data(context);
+
+        let (result, duration_ms) = measure_time(async {
+            let request = context
+                .client
+                .post(&url)
+                .header("Content-Type", &content_type)
+                .body(image_data);
+            let request = context.credentials.apply_to_request(request);
+
+            match request.send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        let body: serde_json::Value = response.json().await.unwrap_or_default();
+                        let crops = body
+                            .get("smartCropsResult")
+                            .and_then(|r| r.get("values"))
+                            .and_then(|v| v.as_array())
+                            .map(|v| v.len())
+                            .unwrap_or(0);
+                        Ok(format!("Smart crops complete: {} crop regions", crops))
+                    } else {
+                        let body = response.text().await.unwrap_or_default();
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
+                    }
+                }
+                Err(e) => Err((0, format!("Request failed: {}", e))),
+            }
+        })
+        .await;
+
+        match result {
+            Ok(details) => TestResult::success(scenario.id, scenario.name, duration_ms)
+                .with_details(details),
+            Err((status, error)) => {
+                let mut result = TestResult::failure(scenario.id, scenario.name, duration_ms, error);
+                if status > 0 {
+                    result = result.with_http_status(status);
+                }
+                result
+            }
+        }
+    }
+
+    async fn test_people_detection(
+        &self,
+        context: &TestContext,
+        scenario: &TestScenario,
+    ) -> TestResult {
+        let endpoint = self.get_endpoint(&context.region, context.cloud, context.endpoint.as_deref());
+        let url = format!(
+            "{}/computervision/imageanalysis:analyze?api-version=2024-02-01&features=people",
+            endpoint
+        );
+
+        let (image_data, content_type) = Self::get_image_data(context);
+
+        let (result, duration_ms) = measure_time(async {
+            let request = context
+                .client
+                .post(&url)
+                .header("Content-Type", &content_type)
+                .body(image_data);
+            let request = context.credentials.apply_to_request(request);
+
+            match request.send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        let body: serde_json::Value = response.json().await.unwrap_or_default();
+                        let people = body
+                            .get("peopleResult")
+                            .and_then(|r| r.get("values"))
+                            .and_then(|v| v.as_array())
+                            .map(|v| v.len())
+                            .unwrap_or(0);
+                        Ok(format!("People detection complete: {} people found", people))
+                    } else {
+                        let body = response.text().await.unwrap_or_default();
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
                     }
                 }
                 Err(e) => Err((0, format!("Request failed: {}", e))),

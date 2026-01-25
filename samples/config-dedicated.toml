@@ -1,0 +1,96 @@
+# Dedicated Service Resources Configuration
+# =============================================================================
+# This config is for dedicated Azure AI service resources where each service
+# has its own resource, endpoint, and API key.
+#
+# Resource types:
+#   - Speech: Microsoft.CognitiveServices/accounts (kind: SpeechServices)
+#   - Translator: Microsoft.CognitiveServices/accounts (kind: TextTranslation)
+#   - Language: Microsoft.CognitiveServices/accounts (kind: TextAnalytics)
+#   - Vision: Microsoft.CognitiveServices/accounts (kind: ComputerVision)
+#   - Document Intelligence: Microsoft.CognitiveServices/accounts (kind: FormRecognizer)
+#
+# Key characteristics:
+#   - Each service has its own API key
+#   - Each service may have a different endpoint and region
+#   - More granular control over service configuration
+#
+# Usage:
+#   cargo run -- test -c samples/config-dedicated.toml --services all
+#   cargo run -- test -c samples/config-dedicated.toml --services speech
+
+[global]
+cloud = "global"
+timeout_seconds = 30
+output_format = "human"
+
+[auth]
+default_method = "key"
+
+# =============================================================================
+# Speech Service (dedicated resource)
+# =============================================================================
+# Resource kind: SpeechServices
+# Endpoint patterns:
+#   - Custom subdomain: https://your-speech.cognitiveservices.azure.com
+#   - Regional TTS: https://{region}.tts.speech.microsoft.com
+#   - Regional STT: https://{region}.stt.speech.microsoft.com
+[services.speech]
+enabled = true
+region = "eastus"
+endpoint = "https://your-speech-resource.cognitiveservices.azure.com"
+# api_key = "your-speech-api-key"  # Or AZURE_SPEECH_API_KEY
+test_scenarios = ["endpoint_check", "voices_list", "token_exchange", "tts", "stt_short", "stt_rest"]
+
+# =============================================================================
+# Translator Service (dedicated resource)
+# =============================================================================
+# Resource kind: TextTranslation
+# Endpoint: https://api.cognitive.microsofttranslator.com (global)
+# Note: For dedicated Translator resources, use region = "global"
+[services.translator]
+enabled = true
+region = "global"
+# api_key = "your-translator-api-key"  # Or AZURE_TRANSLATOR_API_KEY
+test_scenarios = ["endpoint_check", "languages", "detect", "translate"]
+
+# =============================================================================
+# Language Service (dedicated resource)
+# =============================================================================
+# Resource kind: TextAnalytics
+# Endpoint: https://your-language.cognitiveservices.azure.com
+[services.language]
+enabled = true
+region = "eastus"
+endpoint = "https://your-language-resource.cognitiveservices.azure.com"
+# api_key = "your-language-api-key"  # Or AZURE_LANGUAGE_API_KEY
+test_scenarios = ["sentiment", "language_detection", "entities", "key_phrases", "pii_detection", "entity_linking", "summarization"]
+
+# =============================================================================
+# Vision Service (dedicated resource)
+# =============================================================================
+# Resource kind: ComputerVision
+# Endpoint: https://your-vision.cognitiveservices.azure.com
+[services.vision]
+enabled = true
+region = "eastus"
+endpoint = "https://your-vision-resource.cognitiveservices.azure.com"
+# api_key = "your-vision-api-key"  # Or AZURE_VISION_API_KEY
+test_scenarios = ["analyze_image", "read_text", "detect_objects", "smart_crops", "people_detection"]
+
+# =============================================================================
+# Document Intelligence Service (dedicated resource)
+# =============================================================================
+# Resource kind: FormRecognizer
+# Endpoint: https://your-docint.cognitiveservices.azure.com
+[services.document_intelligence]
+enabled = true
+region = "eastus"
+endpoint = "https://your-docint-resource.cognitiveservices.azure.com"
+# api_key = "your-docint-api-key"  # Or AZURE_DOCUMENT_INTELLIGENCE_API_KEY
+test_scenarios = ["layout", "read"]
+
+[custom_inputs]
+audio_file = "./samples/test-speech.wav"
+# document_file = "./samples/test-document.pdf"
+# image_file = "./samples/test-image.png"

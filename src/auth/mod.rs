@@ -1,4 +1,4 @@
-use crate::config::{AuthMethod, Cloud, EntraConfig, UserAuthConfig};
+use crate::config::{AuthMethod, Cloud, EntraConfig, UserAuthConfig, DEFAULT_TIMEOUT_SECS};
 use crate::error::{AppError, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -19,8 +19,8 @@ pub use device_code::DeviceCodeAuth;
 struct TokenResponse {
     access_token: String,
     expires_in: u64,
-    #[allow(dead_code)]
-    token_type: String,
+    #[serde(rename = "token_type")]
+    _token_type: String,
 }
 
 /// Cached token with expiry
@@ -31,9 +31,45 @@ struct CachedToken {
 }
 
 impl CachedToken {
-    fn is_expired(&self) -> bool {
-        // Consider expired 60 seconds before actual expiry
-        Instant::now() + Duration::from_secs(60) >= self.expires_at
+    fn is_expired(&self, buffer_secs: u64) -> bool {
+        Instant::now() + Duration::from_secs(buffer_secs) >= self.expires_at
+    }
+}
+
+/// Token expiry buffer to avoid race conditions (consider expired N seconds early)
+const TOKEN_EXPIRY_BUFFER_SECS: u64 = 60;
+
+/// Shared token cache that handles caching logic for auth providers
+struct TokenCache {
+    cached: Arc<RwLock<Option<CachedToken>>>,
+    buffer_secs: u64,
+}
+
+impl TokenCache {
+    fn new(buffer_secs: u64) -> Self {
+        Self {
+            cached: Arc::new(RwLock::new(None)),
+            buffer_secs,
+        }
+    }
+
+    async fn get(&self) -> Option<String> {
+        let cache = self.cached.read().await;
+        if let Some(ref cached) = *cache {
+            if !cached.is_expired(self.buffer_secs) {
+                return Some(cached.token.clone());
+            }
+        }
+        None
+    }
+
+    async fn set(&self, token: String, expires_in_secs: u64) {
+        let cached = CachedToken {
+            token,
+            expires_at: Instant::now() + Duration::from_secs(expires_in_secs),
+        };
+        let mut cache = self.cached.write().await;
+        *cache = Some(cached);
     }
 }
 
@@ -102,7 +138,7 @@ pub struct EntraTokenAuth {
     client_id: String,
     client_secret: String,
     scope: String,
-    cached_token: Arc<RwLock<Option<CachedToken>>>,
+    token_cache: TokenCache,
 }
 
 impl EntraTokenAuth {
@@ -121,7 +157,7 @@ impl EntraTokenAuth {
             .ok_or_else(|| AppError::Auth("Missing client_secret for Entra auth".to_string()))?;
 
         let client = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
             .map_err(|e| AppError::Network(e.to_string()))?;
 
@@ -132,11 +168,11 @@ impl EntraTokenAuth {
             client_id,
             client_secret,
             scope: cloud.cognitive_scope().to_string(),
-            cached_token: Arc::new(RwLock::new(None)),
+            token_cache: TokenCache::new(TOKEN_EXPIRY_BUFFER_SECS),
         })
     }
 
-    async fn fetch_token(&self) -> Result<CachedToken> {
+    async fn fetch_token(&self) -> Result<(String, u64)> {
         let token_url = format!(
             "{}/{}/oauth2/v2.0/token",
             self.cloud.login_endpoint(),
@@ -175,12 +211,7 @@ impl EntraTokenAuth {
             .await
             .map_err(|e| AppError::Auth(format!("Failed to parse token response: {}", e)))?;
 
-        let expires_at = Instant::now() + Duration::from_secs(token_response.expires_in);
-
-        Ok(CachedToken {
-            token: token_response.access_token,
-            expires_at,
-        })
+        Ok((token_response.access_token, token_response.expires_in))
     }
 }
 
@@ -188,24 +219,15 @@ impl EntraTokenAuth {
 impl AuthProvider for EntraTokenAuth {
     async fn get_credentials(&self) -> Result<Credentials> {
         // Check cache first
-        {
-            let cache = self.cached_token.read().await;
-            if let Some(ref cached) = *cache {
-                if !cached.is_expired() {
-                    return Ok(Credentials::BearerToken(cached.token.clone()));
-                }
-            }
+        if let Some(token) = self.token_cache.get().await {
+            return Ok(Credentials::BearerToken(token));
         }
 
         // Fetch new token
-        let new_token = self.fetch_token().await?;
-        let token = new_token.token.clone();
+        let (token, expires_in) = self.fetch_token().await?;
 
         // Update cache
-        {
-            let mut cache = self.cached_token.write().await;
-            *cache = Some(new_token);
-        }
+        self.token_cache.set(token.clone(), expires_in).await;
 
         Ok(Credentials::BearerToken(token))
     }
@@ -215,18 +237,21 @@ impl AuthProvider for EntraTokenAuth {
     }
 }
 
+/// Cognitive token lifetime (10 minutes, but we use 9 to be safe)
+const COGNITIVE_TOKEN_LIFETIME_SECS: u64 = 540;
+
 /// Cognitive Services token exchange (API key -> short-lived token)
 pub struct CognitiveTokenAuth {
     client: Client,
     api_key: String,
     token_endpoint: String,
-    cached_token: Arc<RwLock<Option<CachedToken>>>,
+    token_cache: TokenCache,
 }
 
 impl CognitiveTokenAuth {
     pub fn new(api_key: String, region: &str, cloud: Cloud) -> Result<Self> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
             .map_err(|e| AppError::Network(e.to_string()))?;
 
@@ -236,19 +261,14 @@ impl CognitiveTokenAuth {
             client,
             api_key,
             token_endpoint,
-            cached_token: Arc::new(RwLock::new(None)),
+            token_cache: TokenCache::new(TOKEN_EXPIRY_BUFFER_SECS),
         })
     }
 
     pub async fn exchange_token(&self) -> Result<String> {
         // Check cache first
-        {
-            let cache = self.cached_token.read().await;
-            if let Some(ref cached) = *cache {
-                if !cached.is_expired() {
-                    return Ok(cached.token.clone());
-                }
-            }
+        if let Some(token) = self.token_cache.get().await {
+            return Ok(token);
         }
 
         // Fetch new token
@@ -278,17 +298,8 @@ impl CognitiveTokenAuth {
             .await
             .map_err(|e| AppError::Auth(format!("Failed to read token: {}", e)))?;
 
-        // Cognitive tokens expire in 10 minutes
-        let cached = CachedToken {
-            token: token.clone(),
-            expires_at: Instant::now() + Duration::from_secs(540), // 9 minutes
-        };
-
         // Update cache
-        {
-            let mut cache = self.cached_token.write().await;
-            *cache = Some(cached);
-        }
+        self.token_cache.set(token.clone(), COGNITIVE_TOKEN_LIFETIME_SECS).await;
 
         Ok(token)
     }

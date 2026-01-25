@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 use crate::config::Cloud;
+use crate::error::sanitize_error;
 use crate::services::{measure_time, AzureService, InputType, TestContext, TestResult, TestScenario};
 
 /// Document Intelligence Service implementation
@@ -177,7 +178,7 @@ impl DocumentIntelligenceService {
                         Ok(format!("Analysis complete: {:?}", body.get("status")))
                     } else {
                         let body = response.text().await.unwrap_or_default();
-                        Err((status.as_u16(), format!("HTTP {}: {}", status, body)))
+                        Err((status.as_u16(), format!("HTTP {}: {}", status, sanitize_error(&body, status.as_u16()))))
                     }
                 }
                 Err(e) => Err((0, format!("Request failed: {}", e))),

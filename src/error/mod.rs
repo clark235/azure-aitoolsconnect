@@ -1,5 +1,22 @@
 use thiserror::Error;
 
+/// Maximum length for error messages exposed to users
+const MAX_ERROR_LEN: usize = 200;
+
+/// Sanitize error messages to prevent information leakage.
+/// - Server errors (5xx) return a generic message to avoid exposing internal details
+/// - Long messages are truncated to prevent sensitive data in stack traces
+pub fn sanitize_error(body: &str, status: u16) -> String {
+    if status >= 500 {
+        return format!("Server error (HTTP {})", status);
+    }
+    if body.len() > MAX_ERROR_LEN {
+        format!("{}... (truncated)", &body[..MAX_ERROR_LEN])
+    } else {
+        body.to_string()
+    }
+}
+
 /// Exit codes for the CLI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitCode {

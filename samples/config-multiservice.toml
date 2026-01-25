@@ -1,0 +1,79 @@
+# Multi-Service CognitiveServices Configuration
+# =============================================================================
+# This config is for Azure Cognitive Services multi-service resources (S0 tier)
+# where a single resource provides access to multiple AI services with one key.
+#
+# Resource type: Microsoft.CognitiveServices/accounts (kind: CognitiveServices)
+#
+# Key characteristics:
+#   - One API key works for Speech, Language, Vision, Translator, etc.
+#   - Custom subdomain endpoint: https://your-resource.cognitiveservices.azure.com
+#   - Region must be specified for services that need it (Speech TTS/STT, Translator)
+#
+# Usage:
+#   cargo run -- test -c samples/config-multiservice.toml --services all
+#   cargo run -- test -c samples/config-multiservice.toml --services speech,language
+
+[global]
+cloud = "global"
+timeout_seconds = 30
+output_format = "human"
+
+[auth]
+default_method = "key"
+
+# =============================================================================
+# CONFIGURE YOUR RESOURCE HERE
+# =============================================================================
+# Replace these values with your actual resource details:
+#   - endpoint: Your custom subdomain (from Azure Portal > Keys and Endpoint)
+#   - region: The Azure region where your resource is deployed
+#   - api_key: Either Key1 or Key2 from Azure Portal
+
+# All services share the same endpoint and API key for multi-service resources.
+# The endpoint and api_key can also be set via environment variables:
+#   AZURE_AI_ENDPOINT=https://your-resource.cognitiveservices.azure.com
+#   AZURE_AI_API_KEY=your-api-key
+#   AZURE_REGION=swedencentral
+
+[services.speech]
+enabled = true
+region = "swedencentral"
+endpoint = "https://your-resource.cognitiveservices.azure.com"
+# api_key = "your-api-key"
+test_scenarios = ["endpoint_check", "voices_list", "token_exchange", "tts", "stt_short", "stt_rest"]
+
+[services.translator]
+enabled = true
+# IMPORTANT: Translator uses the global endpoint but needs the region header
+# set to your resource's actual region when using multi-service keys.
+region = "swedencentral"
+# api_key = "your-api-key"
+test_scenarios = ["endpoint_check", "languages", "detect", "translate"]
+
+[services.language]
+enabled = true
+region = "swedencentral"
+endpoint = "https://your-resource.cognitiveservices.azure.com"
+# api_key = "your-api-key"
+test_scenarios = ["sentiment", "language_detection", "entities", "key_phrases", "pii_detection", "entity_linking", "summarization"]
+
+[services.vision]
+enabled = true
+region = "swedencentral"
+endpoint = "https://your-resource.cognitiveservices.azure.com"
+# api_key = "your-api-key"
+# Note: caption/denseCaptions not available in swedencentral
+test_scenarios = ["analyze_image", "read_text", "detect_objects", "smart_crops", "people_detection"]
+
+[services.document_intelligence]
+enabled = true
+region = "swedencentral"
+endpoint = "https://your-resource.cognitiveservices.azure.com"
+# api_key = "your-api-key"
+test_scenarios = ["layout", "read"]
+
+[custom_inputs]
+audio_file = "./samples/test-speech.wav"
+# document_file = "./samples/test-document.pdf"
+# image_file = "./samples/test-image.png"
